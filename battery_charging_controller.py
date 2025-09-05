@@ -13,6 +13,7 @@ Author: Automated Battery Management
 
 import json
 import logging
+import math
 import os
 import sys
 from datetime import datetime, timedelta, timezone
@@ -178,7 +179,7 @@ class EVCCBatteryController:
                     # Convert from W to kWh (assuming hourly intervals)
                     remaining_forecast += rate['value'] / 1000
             
-            self.logger.info(f"Remaining solar forecast for today: {remaining_forecast:.1f} kWh")
+            self.logger.debug(f"Remaining solar forecast for today: {remaining_forecast:.1f} kWh")
             return remaining_forecast
         except requests.RequestException as e:
             self.logger.warning(f"Could not get solar forecast: {e}")
@@ -204,12 +205,12 @@ class EVCCBatteryController:
                 response = self.session.delete(f"{self.base_url}/batterygridchargelimit", timeout=10)
                 self.logger.info("Removed battery grid charge limit")
             else:
-                # Set limit
+                # Set limit (cost_limit is in EUR/kWh as expected by API)
                 response = self.session.post(
                     f"{self.base_url}/batterygridchargelimit/{cost_limit}",
                     timeout=10
                 )
-                self.logger.info(f"Set battery grid charge limit to {cost_limit} cents/kWh")
+                self.logger.info(f"Set battery grid charge limit to {cost_limit:.4f} EUR/kWh")
             
             response.raise_for_status()
             return True
@@ -249,7 +250,7 @@ class EVCCBatteryController:
         max_price = max(relevant_prices)
         price_spread = (max_price - min_price) * 100  # Convert to cents/kWh
         
-        self.logger.info(f"Price analysis: Min={min_price:.4f}, Max={max_price:.4f}, Spread={price_spread:.2f} cents/kWh")
+        self.logger.debug(f"Price analysis: Min={min_price:.4f}, Max={max_price:.4f}, Spread={price_spread:.2f} cents/kWh")
         return min_price, max_price, price_spread
     
     def _get_battery_soc(self) -> float:
@@ -267,7 +268,7 @@ class EVCCBatteryController:
                 battery_soc = state['battery']['soc']
             
             if battery_soc is not None:
-                self.logger.info(f"Current battery SoC: {battery_soc}%")
+                self.logger.debug(f"Current battery SoC: {battery_soc}%")
                 return battery_soc
             else:
                 self.logger.warning("Could not determine battery SoC from state")
@@ -279,7 +280,7 @@ class EVCCBatteryController:
     
     def run_control_logic(self) -> None:
         """Execute the main battery charging control logic."""
-        self.logger.info("=== Starting Battery Charging Control Logic ===")
+        self.logger.debug("=== Starting Battery Charging Control Logic ===")
         
         # Authenticate if needed
         if not self._authenticate():
@@ -298,8 +299,8 @@ class EVCCBatteryController:
             min_solar_threshold = float(self.config['thresholds']['min_solar_forecast'])
             min_price_spread_threshold = float(self.config['thresholds']['min_price_spread'])
             
-            self.logger.info(f"Current state: SoC={battery_soc}%, "
-                           f"Charge limit={current_charge_limit} cents/kWh, "
+            self.logger.debug(f"Current state: SoC={battery_soc}%, "
+                           f"Charge limit={current_charge_limit:.4f} EUR/kWh, "
                            f"Remaining solar today={solar_forecast:.1f} kWh, "
                            f"Price spread={price_spread:.2f} cents/kWh")
             
@@ -309,22 +310,29 @@ class EVCCBatteryController:
                 solar_forecast < min_solar_threshold and
                 price_spread > min_price_spread_threshold):
                 
-                charge_limit = min_price * 100  # Convert to cents/kWh
-                self.logger.info(f"Conditions met for grid charging. Setting limit to {charge_limit:.2f} cents/kWh")
+                # Log conditions when they are met (INFO level)
+                self.logger.info(f"Charging conditions met: SoC={battery_soc}% < {low_soc_threshold}%, "
+                               f"No limit set, Solar={solar_forecast:.1f} < {min_solar_threshold} kWh, "
+                               f"Price spread={price_spread:.2f} > {min_price_spread_threshold} cents")
+                
+                charge_limit = math.ceil(min_price * 100) / 100  # Round up to next cent, then back to EUR
+                self.logger.info(f"Setting battery grid charge limit to {charge_limit:.4f} EUR/kWh")
                 self._set_battery_charge_limit(charge_limit)
             
             # Rule 2: Disable charging when battery is sufficiently charged
             elif (battery_soc > high_soc_threshold and current_charge_limit > 0):
+                self.logger.info(f"Disabling charging: SoC={battery_soc}% > {high_soc_threshold}%, "
+                               f"Current limit={current_charge_limit:.4f} EUR/kWh")
                 self.logger.info("Battery sufficiently charged. Disabling grid charging.")
                 self._set_battery_charge_limit(0)
             
             else:
-                self.logger.info("No action required based on current conditions")
+                self.logger.debug("No action required based on current conditions")
                 
         except Exception as e:
             self.logger.error(f"Error in control logic: {e}")
         
-        self.logger.info("=== Battery Charging Control Logic Complete ===")
+        self.logger.debug("=== Battery Charging Control Logic Complete ===")
 
 
 def main():
