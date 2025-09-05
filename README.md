@@ -81,4 +81,107 @@ Setting up a static IP address ensures reliable network connectivity:
    - The MAC address is printed on the device label
    - Location: Right side of the physical device
 
+## Battery Charging Controller
+
+### Overview
+
+The repository includes an intelligent battery charging controller that automatically manages grid charging based on dynamic pricing, battery state, and solar forecasts.
+
+### Features
+
+- **Automated Grid Charging**: Charges battery from grid during low-price periods
+- **Configurable Thresholds**: Customizable SoC levels, price spreads, and solar forecasts
+- **Safety Limits**: Prevents overcharging and respects high SoC limits
+- **Comprehensive Logging**: Detailed logs of all decisions and actions
+- **Easy Setup**: Automated installation and cron job configuration
+
+### Algorithm
+
+The controller implements the following logic:
+
+**Enable Grid Charging When:**
+- Battery SoC < 30% (configurable)
+- No charging limit currently set (≤ 0 cents)
+- Remaining solar forecast for today < 10 kWh (configurable)
+- Price spread (max - min) > 10 cents/kWh (configurable)
+
+**Disable Grid Charging When:**
+- Battery SoC > 85% (configurable)
+- Charging limit is currently active
+
+### Installation
+
+1. **Automatic Setup** (Recommended):
+   ```bash
+   ./setup_battery_controller.sh
+   ```
+
+2. **Manual Setup**:
+   ```bash
+   # Install dependencies
+   pip3 install --user requests configparser
+   
+   # Edit configuration
+   nano battery_config.ini
+   
+   # Test the script
+   python3 test_battery_controller.py
+   
+   # Add to crontab (runs every 5 minutes)
+   crontab -e
+   # Add: */5 * * * * cd /home/kiechle/git/evcc-scripts && /usr/bin/python3 battery_charging_controller.py >> /var/log/evcc_battery_controller.log 2>&1
+   ```
+
+### Configuration
+
+Edit `battery_config.ini` to customize:
+
+```ini
+[evcc]
+host = 192.168.0.2          # Your EVCC host IP
+port = 7070                 # EVCC port
+password =                  # EVCC password (if required)
+
+[thresholds]
+battery_low_soc = 30        # Low SoC threshold (%)
+battery_high_soc = 85       # High SoC threshold (%)
+min_solar_forecast = 10     # Minimum remaining solar today (kWh)
+min_price_spread = 10       # Minimum price spread (cents/kWh)
+```
+
+### Testing
+
+Test your configuration and connection:
+
+```bash
+python3 test_battery_controller.py
+```
+
+### Monitoring
+
+View controller activity:
+
+```bash
+# View recent activity
+tail -f /var/log/evcc_battery_controller.log
+
+# Check cron job status
+crontab -l
+```
+
+### Files
+
+- `battery_charging_controller.py` - Main controller script
+- `battery_config.ini` - Configuration file
+- `test_battery_controller.py` - Connection and status test script
+- `setup_battery_controller.sh` - Automated setup script
+
+## Contributing
+
+Feel free to contribute improvements, additional scripts, or documentation enhancements via pull requests.
+
+## License
+
+This project is open source. Please refer to the license file for details.
+
 
