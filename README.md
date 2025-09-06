@@ -17,7 +17,7 @@ The Raspberry Pi 3B was chosen over newer models for this installation due to:
 
 ### Installation Process
 
-Since there's no pre-built EVCC image for Raspberry Pi, the installation follows the standard Linux installation process as documented at [docs.evcc.io](https://docs.evcc.io/docs/installation/linux). The installation process works seamlessly on Raspberry Pi 3B.
+Since there's no pre-built EVCC image for Raspberry Pi 3, the installation follows the standard Linux installation process as documented at [docs.evcc.io](https://docs.evcc.io/docs/installation/linux). The installation process works seamlessly on Raspberry Pi 3B.
 
 ### Power Optimization
 
@@ -75,24 +75,24 @@ Setting up a static IP address ensures reliable network connectivity:
 
 1. **SMA Inverter**: 
    - Access the inverter's web interface directly
-   - Alternatively, use the [Sunny Portal](https://ennexos.sunnyportal.com/) to view device parameters
+   - Find MAC addresses for WLAN and LAN interfaces in the device parameters
 
 2. **SMA Sunny Home Manager**: 
    - The MAC address is printed on the device label
-   - Location: Right side of the physical device
+   - Location: Right side of the device
 
 ## Battery Charging Controller
 
 ### Overview
 
-The repository includes an intelligent battery charging controller that automatically manages grid charging based on dynamic pricing, battery state, and solar forecasts.
+The repository includes an battery charging controller that automatically manages grid charging based on dynamic pricing, battery state, and solar forecasts.
 
 ### Features
 
 - **Automated Grid Charging**: Charges battery from grid during low-price periods
 - **Configurable Thresholds**: Customizable SoC levels, price spreads, and solar forecasts
 - **Safety Limits**: Prevents overcharging and respects high SoC limits
-- **Comprehensive Logging**: Detailed logs of all decisions and actions
+- **Logging**: Detailed logs of all decisions and actions
 - **Easy Setup**: Automated installation and cron job configuration
 
 ### Algorithm
@@ -175,13 +175,6 @@ crontab -l
 - `battery_config.ini` - Configuration file
 - `test_battery_controller.py` - Connection and status test script
 - `setup_battery_controller.sh` - Automated setup script
-
-## Contributing
-
-Feel free to contribute improvements, additional scripts, or documentation enhancements via pull requests.
-
-## License
-
-This project is open source. Please refer to the license file for details.
+  
 
 
