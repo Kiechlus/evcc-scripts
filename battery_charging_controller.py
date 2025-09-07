@@ -141,7 +141,7 @@ class EVCCBatteryController:
             return []
     
     def _get_solar_forecast(self) -> float:
-        """Get remaining solar forecast for today."""
+        """Get solar forecast for the next 12 hours."""
         try:
             response = self.session.get(f"{self.base_url}/tariff/solar", timeout=10)
             if response.status_code == 404:
@@ -162,10 +162,9 @@ class EVCCBatteryController:
             
             from datetime import timezone
             now = datetime.now(timezone.utc)
-            today = now.date()
-            end_of_today = datetime.combine(today, datetime.max.time()).replace(tzinfo=timezone.utc)
+            end_forecast_window = now + timedelta(hours=12)
             
-            remaining_forecast = 0.0
+            forecast_12h = 0.0
             for rate in solar_data:
                 rate_time_str = rate['start'].replace('Z', '+00:00')
                 rate_time = datetime.fromisoformat(rate_time_str)
@@ -174,13 +173,13 @@ class EVCCBatteryController:
                 if rate_time.tzinfo is None:
                     rate_time = rate_time.replace(tzinfo=timezone.utc)
                     
-                # Only count future solar production for today
-                if now <= rate_time <= end_of_today:
+                # Only count solar production for the next 12 hours
+                if now <= rate_time <= end_forecast_window:
                     # Convert from W to kWh (assuming hourly intervals)
-                    remaining_forecast += rate['value'] / 1000
+                    forecast_12h += rate['value'] / 1000
             
-            self.logger.debug(f"Remaining solar forecast for today: {remaining_forecast:.1f} kWh")
-            return remaining_forecast
+            self.logger.debug(f"Solar forecast for next 12 hours: {forecast_12h:.1f} kWh")
+            return forecast_12h
         except requests.RequestException as e:
             self.logger.warning(f"Could not get solar forecast: {e}")
             return 0.0
@@ -301,7 +300,7 @@ class EVCCBatteryController:
             
             self.logger.debug(f"Current state: SoC={battery_soc}%, "
                            f"Charge limit={current_charge_limit:.4f} EUR/kWh, "
-                           f"Remaining solar today={solar_forecast:.1f} kWh, "
+                           f"Solar forecast (12h)={solar_forecast:.1f} kWh, "
                            f"Price spread={price_spread:.2f} cents/kWh")
             
             # Rule 1: Enable charging when conditions are met

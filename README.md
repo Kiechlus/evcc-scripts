@@ -102,7 +102,7 @@ The controller implements the following logic:
 **Enable Grid Charging When:**
 - Battery SoC < 30% (configurable)
 - No charging limit currently set (≤ 0 cents)
-- Remaining solar forecast for today < 10 kWh (configurable)
+- Solar forecast for next 12 hours < 10 kWh (configurable)
 - Price spread (max - min) > 10 cents/kWh (configurable)
 
 **Disable Grid Charging When:**
@@ -145,7 +145,7 @@ password =                  # EVCC password (if required)
 [thresholds]
 battery_low_soc = 30        # Low SoC threshold (%)
 battery_high_soc = 85       # High SoC threshold (%)
-min_solar_forecast = 10     # Minimum remaining solar today (kWh)
+min_solar_forecast = 10     # Minimum solar forecast (12h) (kWh)
 min_price_spread = 10       # Minimum price spread (cents/kWh)
 ```
 
