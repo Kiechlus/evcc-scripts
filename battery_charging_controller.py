@@ -59,6 +59,7 @@ class EVCCBatteryController:
                 'battery_low_soc': '30',
                 'battery_high_soc': '85',
                 'min_solar_forecast': '10',
+                'solar_forecast_hours': '24',
                 'min_price_spread': '10'
             },
             'logging': {
@@ -141,8 +142,14 @@ class EVCCBatteryController:
             return []
     
     def _get_solar_forecast(self) -> float:
-        """Get solar forecast for the next 12 hours."""
+        """Get solar forecast for the configured time window."""
         try:
+            # Get forecast window from config (0 = disabled)
+            forecast_hours = float(self.config['thresholds']['solar_forecast_hours'])
+            if forecast_hours <= 0:
+                self.logger.debug("Solar forecast disabled (solar_forecast_hours = 0)")
+                return 0.0
+            
             response = self.session.get(f"{self.base_url}/tariff/solar", timeout=10)
             if response.status_code == 404:
                 self.logger.warning("Solar forecast not configured")
@@ -162,9 +169,9 @@ class EVCCBatteryController:
             
             from datetime import timezone
             now = datetime.now(timezone.utc)
-            end_forecast_window = now + timedelta(hours=12)
+            end_forecast_window = now + timedelta(hours=forecast_hours)
             
-            forecast_12h = 0.0
+            forecast_total = 0.0
             for rate in solar_data:
                 rate_time_str = rate['start'].replace('Z', '+00:00')
                 rate_time = datetime.fromisoformat(rate_time_str)
@@ -173,13 +180,13 @@ class EVCCBatteryController:
                 if rate_time.tzinfo is None:
                     rate_time = rate_time.replace(tzinfo=timezone.utc)
                     
-                # Only count solar production for the next 12 hours
+                # Only count solar production for the configured window
                 if now <= rate_time <= end_forecast_window:
                     # Convert from W to kWh (assuming hourly intervals)
-                    forecast_12h += rate['value'] / 1000
+                    forecast_total += rate['value'] / 1000
             
-            self.logger.debug(f"Solar forecast for next 12 hours: {forecast_12h:.1f} kWh")
-            return forecast_12h
+            self.logger.debug(f"Solar forecast for next {forecast_hours:.0f} hours: {forecast_total:.1f} kWh")
+            return forecast_total
         except requests.RequestException as e:
             self.logger.warning(f"Could not get solar forecast: {e}")
             return 0.0
@@ -296,22 +303,31 @@ class EVCCBatteryController:
             low_soc_threshold = float(self.config['thresholds']['battery_low_soc'])
             high_soc_threshold = float(self.config['thresholds']['battery_high_soc'])
             min_solar_threshold = float(self.config['thresholds']['min_solar_forecast'])
+            solar_forecast_hours = float(self.config['thresholds']['solar_forecast_hours'])
             min_price_spread_threshold = float(self.config['thresholds']['min_price_spread'])
             
             self.logger.debug(f"Current state: SoC={battery_soc}%, "
                            f"Charge limit={current_charge_limit:.4f} EUR/kWh, "
-                           f"Solar forecast (12h)={solar_forecast:.1f} kWh, "
+                           f"Solar forecast ({solar_forecast_hours:.0f}h)={solar_forecast:.1f} kWh, "
                            f"Price spread={price_spread:.2f} cents/kWh")
             
             # Rule 1: Enable charging when conditions are met
+            # Check solar condition only if solar forecast is enabled
+            solar_condition_met = (solar_forecast_hours <= 0) or (solar_forecast < min_solar_threshold)
+            
             if (battery_soc < low_soc_threshold and 
                 current_charge_limit <= 0 and
-                solar_forecast < min_solar_threshold and
+                solar_condition_met and
                 price_spread > min_price_spread_threshold):
                 
                 # Log conditions when they are met (INFO level)
+                if solar_forecast_hours <= 0:
+                    solar_msg = "Solar forecast disabled"
+                else:
+                    solar_msg = f"Solar={solar_forecast:.1f} < {min_solar_threshold} kWh"
+                
                 self.logger.info(f"Charging conditions met: SoC={battery_soc}% < {low_soc_threshold}%, "
-                               f"No limit set, Solar={solar_forecast:.1f} < {min_solar_threshold} kWh, "
+                               f"No limit set, {solar_msg}, "
                                f"Price spread={price_spread:.2f} > {min_price_spread_threshold} cents")
                 
                 charge_limit = math.ceil(min_price * 100) / 100  # Round up to next cent, then back to EUR
