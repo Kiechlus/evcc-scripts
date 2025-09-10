@@ -371,7 +371,7 @@ The repository includes an battery charging controller that automatically manage
 
 The controller implements the following logic:
 
-**Enable Grid Charging When:**
+**Enable Grid Chargingat cheapest price when:**
 - Battery SoC < 30% (configurable)
 - No charging limit currently set (≤ 0 cents)
 - Solar forecast for next X hours < 10 kWh (configurable window and threshold)
