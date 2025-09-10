@@ -10,8 +10,14 @@ This repository contains scripts and documentation for working with the excellen
   - [Installation Process](#installation-process)
   - [Power Optimization](#power-optimization)
   - [Network Configuration](#network-configuration)
+- [Secure Remote Access](#secure-remote-access)
+  - [Remote Access Overview](#remote-access-overview)
+  - [Cloudflare Tunnel Setup](#cloudflare-tunnel-setup)
+  - [Nginx Reverse Proxy with Basic Auth](#nginx-reverse-proxy-with-basic-auth)
+  - [Complete Configuration](#complete-configuration)
+  - [Security Considerations](#security-considerations)
 - [Battery Charging Controller](#battery-charging-controller)
-  - [Overview](#overview-1)
+  - [Controller Overview](#controller-overview)
   - [Features](#features)
   - [Algorithm](#algorithm)
   - [Installation](#installation)
@@ -104,9 +110,252 @@ Setting up a static IP address ensures reliable network connectivity:
    - The MAC address is printed on the device label
    - Location: Right side of the device
 
+## Secure Remote Access
+
+### Remote Access Overview
+
+This section describes how to securely expose your EVCC installation to the internet using Cloudflare tunnels and nginx reverse proxy with basic authentication. This setup provides:
+
+- **Zero Trust Security**: No open ports on your home network
+- **SSL/TLS Encryption**: Automatic HTTPS with Cloudflare certificates
+- **Basic Authentication**: Username/password protection
+- **WebSocket Support**: Full compatibility with EVCC's real-time features
+- **DDoS Protection**: Cloudflare's built-in protection
+
+### Cloudflare Tunnel Setup
+
+#### Prerequisites
+
+- Cloudflare account with a domain (free tier works)
+- Domain DNS managed by Cloudflare
+- `cloudflared` installed on your Raspberry Pi
+
+#### Step 1: Install Cloudflared
+
+```bash
+# Download and install cloudflared
+wget https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-arm64.deb
+sudo dpkg -i cloudflared-linux-arm64.deb
+```
+
+#### Step 2: Authenticate with Cloudflare
+
+```bash
+# Login to Cloudflare (opens browser)
+cloudflared tunnel login
+```
+
+This will save your credentials to `/home/kiechlus/.cloudflared/cert.pem`.
+
+#### Step 3: Create Tunnel
+
+```bash
+# Create a tunnel named 'evcc'
+cloudflared tunnel create evcc
+```
+
+This creates a tunnel and saves credentials to `/home/kiechlus/.cloudflared/<tunnel-id>.json`.
+
+#### Step 4: Configure DNS
+
+```bash
+# Create DNS record pointing to your tunnel
+cloudflared tunnel route dns evcc evcc.yourdomain.org
+```
+
+Alternatively, manually create a CNAME record in Cloudflare Dashboard:
+- **Type**: CNAME
+- **Name**: evcc
+- **Target**: `<tunnel-id>.cfargotunnel.com`
+- **Proxy Status**: Proxied (orange cloud)
+
+#### Step 5: Create Tunnel Configuration
+
+```bash
+# Create configuration directory
+sudo mkdir -p /etc/cloudflared
+
+# Create tunnel configuration
+sudo nano /etc/cloudflared/config.yml
+```
+
+Add the following configuration:
+
+```yaml
+tunnel: evcc
+credentials-file: /home/kiechlus/.cloudflared/<your-tunnel-id>.json
+
+ingress:
+  - hostname: evcc.yourdomain.org
+    service: http://localhost:80  # Points to nginx
+  - service: http_status:404
+```
+
+Replace `<your-tunnel-id>` with your actual tunnel ID.
+
+### Nginx Reverse Proxy with Basic Auth
+
+#### Step 1: Install Nginx and Tools
+
+```bash
+sudo apt update
+sudo apt install nginx apache2-utils -y
+```
+
+#### Step 2: Create User Accounts
+
+```bash
+# Create password file with first user
+sudo htpasswd -c /etc/nginx/.evcc_passwd user1
+
+# Add additional users
+sudo htpasswd /etc/nginx/.evcc_passwd user2
+sudo htpasswd /etc/nginx/.evcc_passwd user3
+```
+
+#### Step 3: Configure Nginx
+
+Create nginx configuration:
+
+```bash
+sudo nano /etc/nginx/sites-available/evcc
+```
+
+Add the following configuration:
+
+```nginx
+server {
+    listen 80;
+    server_name evcc.yourdomain.org;
+
+    # Security headers
+    add_header X-Frame-Options DENY;
+    add_header X-Content-Type-Options nosniff;
+    add_header X-XSS-Protection "1; mode=block";
+    add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+
+    location / {
+        # Basic Authentication
+        auth_basic "EVCC Access - Restricted";
+        auth_basic_user_file /etc/nginx/.evcc_passwd;
+
+        # Proxy settings
+        proxy_pass http://localhost:7070;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+
+        # WebSocket Support (essential for EVCC)
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "Upgrade";
+        
+        # Timeouts
+        proxy_connect_timeout 60s;
+        proxy_send_timeout 60s;
+        proxy_read_timeout 60s;
+    }
+}
+```
+
+#### Step 4: Enable Site
+
+```bash
+# Enable the site
+sudo ln -s /etc/nginx/sites-available/evcc /etc/nginx/sites-enabled/
+
+# Test nginx configuration
+sudo nginx -t
+
+# Restart nginx
+sudo systemctl restart nginx
+```
+
+### Complete Configuration
+
+#### Step 1: Create Systemd Service
+
+```bash
+sudo nano /etc/systemd/system/cloudflared-evcc.service
+```
+
+Add the following service configuration:
+
+```ini
+[Unit]
+Description=Cloudflare Tunnel for EVCC
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=kiechlus
+ExecStart=/usr/local/bin/cloudflared tunnel run evcc
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+```
+
+#### Step 2: Enable and Start Services
+
+```bash
+# Reload systemd
+sudo systemctl daemon-reload
+
+# Enable and start cloudflared service
+sudo systemctl enable --now cloudflared-evcc
+
+# Ensure nginx is running
+sudo systemctl enable --now nginx
+
+# Check service status
+sudo systemctl status cloudflared-evcc
+sudo systemctl status nginx
+```
+
+#### Step 3: Monitor Logs
+
+```bash
+# Watch cloudflared logs
+sudo journalctl -u cloudflared-evcc -f
+
+# Watch nginx logs
+sudo tail -f /var/log/nginx/access.log
+sudo tail -f /var/log/nginx/error.log
+```
+
+#### Step 4: Test the Setup
+
+1. Wait a few minutes for DNS propagation
+2. Visit `https://evcc.yourdomain.org`
+3. Enter your username and password
+4. Verify EVCC loads correctly with real-time updates
+
+### Security Considerations
+
+#### Network Security
+
+- **No Open Ports**: Cloudflare tunnel requires no inbound firewall rules
+- **Zero Trust**: All traffic flows through Cloudflare's edge network
+- **DDoS Protection**: Automatic protection against attacks
+
+#### Authentication Security
+
+```bash
+# Secure the password file
+sudo chmod 600 /etc/nginx/.evcc_passwd
+sudo chown root:root /etc/nginx/.evcc_passwd
+
+# Regular password rotation
+sudo htpasswd /etc/nginx/.evcc_passwd username
+```
+
 ## Battery Charging Controller
 
-### Overview
+### Controller Overview
 
 The repository includes an battery charging controller that automatically manages grid charging of the home battery based on dynamic pricing, battery state, and solar forecasts.
 
