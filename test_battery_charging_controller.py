@@ -51,6 +51,7 @@ battery_low_soc = 30
 battery_high_soc = 85
 min_solar_forecast = 10
 solar_forecast_hours = 24
+price_analysis_hours = 12
 min_price_spread = 10
 
 [logging]
@@ -76,6 +77,7 @@ file = /tmp/test_evcc_battery_controller.log
         self.assertEqual(self.controller.config['evcc']['port'], '7070')
         self.assertEqual(float(self.controller.config['thresholds']['battery_low_soc']), 30)
         self.assertEqual(float(self.controller.config['thresholds']['solar_forecast_hours']), 24)
+        self.assertEqual(float(self.controller.config['thresholds']['price_analysis_hours']), 12)
 
     def test_authentication_no_password(self):
         """Test authentication when no password is configured."""
@@ -212,6 +214,28 @@ file = /tmp/test_evcc_battery_controller.log
             self.assertEqual(min_price, 0.0)
             self.assertEqual(max_price, 0.0)
             self.assertEqual(price_spread, 0.0)
+
+    def test_analyze_prices_configurable_window(self):
+        """Test price analysis with configurable time window."""
+        # Set price analysis window to 6 hours
+        self.controller.config['thresholds']['price_analysis_hours'] = '6'
+        
+        now = datetime.now(timezone.utc)
+        mock_rates = [
+            {'start': (now + timedelta(hours=1)).isoformat().replace('+00:00', 'Z'), 'value': 0.15},  # Within 6h
+            {'start': (now + timedelta(hours=3)).isoformat().replace('+00:00', 'Z'), 'value': 0.10},  # Within 6h (min)
+            {'start': (now + timedelta(hours=5)).isoformat().replace('+00:00', 'Z'), 'value': 0.25},  # Within 6h (max)
+            {'start': (now + timedelta(hours=8)).isoformat().replace('+00:00', 'Z'), 'value': 0.35},  # Outside 6h window
+        ]
+        
+        with patch.object(self.controller, '_get_tariff_data', return_value=mock_rates):
+            min_price, max_price, price_spread = self.controller._analyze_prices()
+            
+            # Should only consider prices within 6 hour window
+            self.assertEqual(min_price, 0.10)  # From 3h rate
+            self.assertEqual(max_price, 0.25)  # From 5h rate  
+            self.assertEqual(price_spread, 15.0)  # (0.25 - 0.10) * 100
+            # 0.35 price at 8h should be ignored
 
     def test_get_solar_forecast_enabled(self):
         """Test solar forecast with enabled window."""
@@ -419,6 +443,7 @@ battery_low_soc = 30
 battery_high_soc = 85
 min_solar_forecast = 10
 solar_forecast_hours = 24
+price_analysis_hours = 12
 min_price_spread = 10
 
 [logging]

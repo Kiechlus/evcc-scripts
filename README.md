@@ -371,15 +371,26 @@ The repository includes an battery charging controller that automatically manage
 
 The controller implements the following logic:
 
-**Enable Grid Chargingat cheapest price when:**
+**Enable Grid Charging at cheapest price when:**
 - Battery SoC < 30% (configurable)
 - No charging limit currently set (≤ 0 cents)
 - Solar forecast for next X hours < 10 kWh (configurable window and threshold)
-- Price spread (max - min) > 10 cents/kWh (configurable)
+- Price spread (max - min) > 10 cents/kWh within analysis window (configurable)
 
 **Disable Grid Charging When:**
 - Battery SoC > 85% (configurable)
 - Charging limit is currently active
+
+**Price Analysis Window:**
+- Analyzes electricity prices for the next X hours (default: 12 hours)
+- Finds the minimum and maximum prices within this window
+- Calculates price spread to determine if charging is economically beneficial
+- Sets charging limit to the minimum price found in the analysis window
+
+**Configuration Parameters:**
+- `price_analysis_hours`: How far into the future to analyze prices (default: 12 hours)
+- `solar_forecast_hours`: How far into the future to check solar forecast (default: 24 hours, 0=disabled)
+- Both windows can be configured independently for optimal strategy
 
 ### Installation
 
@@ -419,6 +430,7 @@ battery_low_soc = 30        # Low SoC threshold (%)
 battery_high_soc = 85       # High SoC threshold (%)
 min_solar_forecast = 10     # Minimum solar forecast (kWh)
 solar_forecast_hours = 24   # Solar forecast window (hours, 0=disabled)
+price_analysis_hours = 12   # Price analysis window (hours)
 min_price_spread = 10       # Minimum price spread (cents/kWh)
 ```
 

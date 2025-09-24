@@ -231,10 +231,11 @@ class EVCCBatteryController:
             self.logger.warning("No price data available")
             return 0.0, 0.0, 0.0
         
-        # Get next 24 hours of price data
+        # Get configurable hours of price data
         from datetime import timezone
+        price_window_hours = float(self.config['thresholds']['price_analysis_hours'])
         now = datetime.now(timezone.utc)
-        next_24h = now + timedelta(hours=24)
+        analysis_end = now + timedelta(hours=price_window_hours)
         
         relevant_prices = []
         for rate in tariff_data:
@@ -245,18 +246,18 @@ class EVCCBatteryController:
             if rate_time.tzinfo is None:
                 rate_time = rate_time.replace(tzinfo=timezone.utc)
             
-            if now <= rate_time <= next_24h:
+            if now <= rate_time <= analysis_end:
                 relevant_prices.append(rate['value'])
         
         if not relevant_prices:
-            self.logger.warning("No price data for next 24 hours")
+            self.logger.warning(f"No price data for next {price_window_hours} hours")
             return 0.0, 0.0, 0.0
         
         min_price = min(relevant_prices)
         max_price = max(relevant_prices)
         price_spread = (max_price - min_price) * 100  # Convert to cents/kWh
         
-        self.logger.debug(f"Price analysis: Min={min_price:.4f}, Max={max_price:.4f}, Spread={price_spread:.2f} cents/kWh")
+        self.logger.debug(f"Price analysis ({price_window_hours}h window): Min={min_price:.4f}, Max={max_price:.4f}, Spread={price_spread:.2f} cents/kWh")
         return min_price, max_price, price_spread
     
     def _get_battery_soc(self) -> float:
