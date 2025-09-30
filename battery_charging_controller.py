@@ -13,6 +13,7 @@ Author: Automated Battery Management
 
 import json
 import logging
+from logging.handlers import TimedRotatingFileHandler
 import math
 import os
 import sys
@@ -32,17 +33,44 @@ class EVCCBatteryController:
         self.base_url = f"http://{self.config['evcc']['host']}:{self.config['evcc']['port']}/api"
         self.session = requests.Session()
         
-        # Setup logging
+        # Setup logging with rotation (retain only last N days)
         log_file = os.path.expanduser(self.config['logging']['file'])
-        logging.basicConfig(
-            level=getattr(logging, self.config['logging']['level'].upper()),
-            format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-            handlers=[
-                logging.FileHandler(log_file),
-                logging.StreamHandler()
-            ]
+        retention_days = int(self.config['logging'].get('retention_days', '3'))
+        # TimedRotatingFileHandler keeps 'backupCount' old files in addition to the current.
+        # To retain ONLY the last <retention_days> days including today, we set backupCount = retention_days - 1.
+        backup_count = max(retention_days - 1, 0)
+
+        # Create parent directory if missing
+        os.makedirs(os.path.dirname(log_file), exist_ok=True)
+
+        logger = logging.getLogger(__name__)
+        # Avoid duplicate handlers if instantiated multiple times (e.g., in tests)
+        if logger.handlers:
+            for h in list(logger.handlers):
+                logger.removeHandler(h)
+
+        logger.setLevel(getattr(logging, self.config['logging']['level'].upper()))
+
+        formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+
+        rotating_handler = TimedRotatingFileHandler(
+            log_file,
+            when='midnight',
+            interval=1,
+            backupCount=backup_count,
+            utc=True,
+            encoding='utf-8'
         )
-        self.logger = logging.getLogger(__name__)
+        rotating_handler.setFormatter(formatter)
+
+        console_handler = logging.StreamHandler()
+        console_handler.setFormatter(formatter)
+
+        logger.addHandler(rotating_handler)
+        logger.addHandler(console_handler)
+        logger.propagate = False
+
+        self.logger = logger
         
     def _load_config(self, config_file: str) -> ConfigParser:
         """Load configuration from INI file."""
@@ -64,7 +92,8 @@ class EVCCBatteryController:
             },
             'logging': {
                 'level': 'INFO',
-                'file': '/var/log/evcc_battery_controller.log'
+                'file': '/var/log/evcc_battery_controller.log',
+                'retention_days': '3'  # Keep only the last 3 days (current + previous 2)
             }
         }
         
@@ -317,7 +346,7 @@ class EVCCBatteryController:
             solar_condition_met = (solar_forecast_hours <= 0) or (solar_forecast < min_solar_threshold)
             
             if (battery_soc < low_soc_threshold and 
-                current_charge_limit <= 0 and
+                # current_charge_limit <= 0 and # Allow re-evaluation even if limit is set, this can lead to better priceshello
                 solar_condition_met and
                 price_spread > min_price_spread_threshold):
                 
@@ -336,7 +365,7 @@ class EVCCBatteryController:
                 self._set_battery_charge_limit(charge_limit)
             
             # Rule 2: Disable charging when battery is sufficiently charged
-            elif (battery_soc > high_soc_threshold and current_charge_limit > 0):
+            if (battery_soc > high_soc_threshold and current_charge_limit > 0):
                 self.logger.info(f"Disabling charging: SoC={battery_soc}% > {high_soc_threshold}%, "
                                f"Current limit={current_charge_limit:.4f} EUR/kWh")
                 self.logger.info("Battery sufficiently charged. Disabling grid charging.")
