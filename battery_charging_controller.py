@@ -253,12 +253,16 @@ class EVCCBatteryController:
             self.logger.error(f"Failed to set battery charge limit: {e}")
             return False
     
-    def _analyze_prices(self) -> Tuple[float, float, float]:
-        """Analyze current and upcoming prices to find min/max spread."""
+    def _analyze_prices(self) -> Tuple[float, float, float, float]:
+        """Analyze current and upcoming prices to find min/max spread and current price.
+        
+        Returns:
+            Tuple of (current_price, min_price, max_price, price_spread)
+        """
         tariff_data = self._get_tariff_data("grid")
         if not tariff_data:
             self.logger.warning("No price data available")
-            return 0.0, 0.0, 0.0
+            return 0.0, 0.0, 0.0, 0.0
         
         # Get configurable hours of price data
         from datetime import timezone
@@ -266,7 +270,9 @@ class EVCCBatteryController:
         now = datetime.now(timezone.utc)
         analysis_end = now + timedelta(hours=price_window_hours)
         
+        current_price = None
         relevant_prices = []
+        
         for rate in tariff_data:
             rate_time_str = rate['start'].replace('Z', '+00:00')
             rate_time = datetime.fromisoformat(rate_time_str)
@@ -275,19 +281,27 @@ class EVCCBatteryController:
             if rate_time.tzinfo is None:
                 rate_time = rate_time.replace(tzinfo=timezone.utc)
             
+            # Find current price (the most recent rate that has started)
+            if rate_time <= now and current_price is None:
+                current_price = rate['value']
+            
             if now <= rate_time <= analysis_end:
                 relevant_prices.append(rate['value'])
         
-        if not relevant_prices:
+        # If current price not found in past rates, use first future rate
+        if current_price is None and relevant_prices:
+            current_price = relevant_prices[0]
+        
+        if not relevant_prices or current_price is None:
             self.logger.warning(f"No price data for next {price_window_hours} hours")
-            return 0.0, 0.0, 0.0
+            return 0.0, 0.0, 0.0, 0.0
         
         min_price = min(relevant_prices)
         max_price = max(relevant_prices)
         price_spread = (max_price - min_price) * 100  # Convert to cents/kWh
         
-        self.logger.debug(f"Price analysis ({price_window_hours}h window): Min={min_price:.4f}, Max={max_price:.4f}, Spread={price_spread:.2f} cents/kWh")
-        return min_price, max_price, price_spread
+        self.logger.debug(f"Price analysis ({price_window_hours}h window): Current={current_price:.4f}, Min={min_price:.4f}, Max={max_price:.4f}, Spread={price_spread:.2f} cents/kWh")
+        return current_price, min_price, max_price, price_spread
     
     def _get_battery_soc(self) -> float:
         """Get current battery state of charge."""
@@ -327,7 +341,7 @@ class EVCCBatteryController:
             battery_soc = self._get_battery_soc()
             current_charge_limit = self._get_current_battery_charge_limit()
             solar_forecast = self._get_solar_forecast()
-            min_price, max_price, price_spread = self._analyze_prices()
+            current_price, min_price, max_price, price_spread = self._analyze_prices()
             
             # Load thresholds from config
             low_soc_threshold = float(self.config['thresholds']['battery_low_soc'])
@@ -339,16 +353,23 @@ class EVCCBatteryController:
             self.logger.debug(f"Current state: SoC={battery_soc}%, "
                            f"Charge limit={current_charge_limit:.4f} EUR/kWh, "
                            f"Solar forecast ({solar_forecast_hours:.0f}h)={solar_forecast:.1f} kWh, "
+                           f"Current price={current_price:.4f} EUR/kWh, "
                            f"Price spread={price_spread:.2f} cents/kWh")
             
             # Rule 1: Enable charging when conditions are met
             # Check solar condition only if solar forecast is enabled
             solar_condition_met = (solar_forecast_hours <= 0) or (solar_forecast < min_solar_threshold)
             
+            # Only charge when current price is LOWER than maximum in forecast window
+            # This catches the typical winter scenario: low early morning prices before everyone wakes up
+            current_price_cents = current_price * 100
+            max_price_cents = max_price * 100
+            is_price_advantageous = current_price < max_price  # Current price must be lower than future max
+            
             if (battery_soc < low_soc_threshold and 
-                # current_charge_limit <= 0 and # Allow re-evaluation even if limit is set, this can lead to better priceshello
                 solar_condition_met and
-                price_spread > min_price_spread_threshold):
+                price_spread > min_price_spread_threshold and
+                is_price_advantageous):  # Only charge when current price is lower than upcoming prices
                 
                 # Log conditions when they are met (INFO level)
                 if solar_forecast_hours <= 0:
@@ -357,12 +378,19 @@ class EVCCBatteryController:
                     solar_msg = f"Solar={solar_forecast:.1f} < {min_solar_threshold} kWh"
                 
                 self.logger.info(f"Charging conditions met: SoC={battery_soc}% < {low_soc_threshold}%, "
-                               f"No limit set, {solar_msg}, "
-                               f"Price spread={price_spread:.2f} > {min_price_spread_threshold} cents")
+                               f"{solar_msg}, "
+                               f"Price spread={price_spread:.2f} > {min_price_spread_threshold} cents, "
+                               f"Current price={current_price_cents:.1f} cents < Max price={max_price_cents:.1f} cents")
                 
                 charge_limit = math.ceil(min_price * 100) / 100  # Round up to next cent, then back to EUR
                 self.logger.info(f"Setting battery grid charge limit to {charge_limit:.4f} EUR/kWh")
                 self._set_battery_charge_limit(charge_limit)
+            
+            # Log why we're NOT charging if conditions are close but not met
+            elif battery_soc < low_soc_threshold and solar_condition_met and price_spread > min_price_spread_threshold:
+                if not is_price_advantageous:
+                    self.logger.info(f"NOT charging: Current price {current_price_cents:.1f} cents is NOT lower than max price {max_price_cents:.1f} cents. "
+                                   f"Waiting for prices to rise before charging.")
             
             # Rule 2: Disable charging when battery is sufficiently charged
             if (battery_soc > high_soc_threshold and current_charge_limit > 0):
